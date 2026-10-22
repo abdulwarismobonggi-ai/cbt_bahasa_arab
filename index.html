@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aplikasi Ujian Online (CBT)</title>
+  <style>
+    * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body { background-color: #f4f6f9; margin: 0; padding: 20px; }
+    .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 20px; }
+    .timer { font-size: 1.2rem; font-weight: bold; color: #d9534f; background: #fdf2f2; padding: 8px 15px; border-radius: 5px; border: 1px solid #f5c6cb; }
+    .badge-warning { background: #fff3cd; color: #856404; padding: 5px 10px; border-radius: 4px; font-weight: bold; font-size: 0.9rem; }
+    
+    /* Pengaturan Teks Arab Agar Rapi dan Jelas */
+    .question-arabic {
+      font-family: 'Amiri', 'Traditional Arabic', 'Scheherazade New', serif;
+      font-size: 1.6rem;
+      direction: rtl;
+      text-align: right;
+      line-height: 2.3;
+      margin-bottom: 20px;
+    }
+    
+    .options label { display: block; background: #f8f9fa; padding: 12px 15px; border: 1px solid #ddd; margin-bottom: 10px; border-radius: 5px; cursor: pointer; transition: 0.2s; }
+    .options label:hover { background: #e9ecef; }
+    .options input[type="radio"] { margin-right: 10px; }
+    .nav-buttons { display: flex; justify-content: space-between; margin-top: 20px; }
+    .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    .btn-primary { background: #007bff; color: white; }
+    .btn-success { background: #28a745; color: white; }
+    .btn-secondary { background: #6c757d; color: white; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+    
+    /* Overlay Peringatan Kecurangan */
+    #warningOverlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(220, 53, 69, 0.95); color: white; z-index: 9999; justify-content: center; align-items: center; flex-direction: column; text-align: center; padding: 20px; }
+    #warningOverlay h1 { font-size: 3rem; margin-bottom: 10px; }
+    #warningOverlay p { font-size: 1.2rem; max-width: 600px; }
+  </style>
+</head>
+<body>
+
+<!-- Popup Peringatan Kecurangan -->
+<div id="warningOverlay">
+  <h1>⚠️ PERINGATAN!</h1>
+  <p id="warningText">Terdeteksi melakukan kecurangan!</p>
+  <p>Peringatan ini telah dicatat oleh sistem.</p>
+  <button class="btn btn-primary" onclick="closeWarning()">Saya Mengerti & Lanjutkan Ujian</button>
+</div>
+
+<div class="container">
+  <!-- Halaman Login -->
+  <div id="loginPage">
+    <h2>Form Login Ujian</h2>
+    <div style="margin-bottom: 15px;">
+      <label>Nama Lengkap:</label>
+      <input type="text" id="inputNama" style="width: 100%; padding: 10px; margin-top: 5px;" required>
+    </div>
+    <div style="margin-bottom: 20px;">
+      <label>NIS / Nomor Ujian:</label>
+      <input type="text" id="inputNis" style="width: 100%; padding: 10px; margin-top: 5px;" required>
+    </div>
+    <button class="btn btn-primary" onclick="startExam()">Mulai Ujian</button>
+  </div>
+
+  <!-- Halaman Ujian -->
+  <div id="examPage" style="display: none;">
+    <div class="header">
+      <div>
+        <h3 id="displayNama" style="margin: 0;">-</h3>
+        <span class="badge-warning">Pelanggaran: <span id="violationCount">0</span>x</span>
+      </div>
+      <div class="timer" id="timerDisplay">60:00</div>
+    </div>
+
+    <div class="question-box">
+      <div id="questionText" class="question-arabic">Siswa sedang memuat soal...</div>
+      <div class="options" id="optionsContainer"></div>
+    </div>
+
+    <div class="nav-buttons">
+      <button class="btn btn-secondary" id="btnPrev" onclick="prevQuestion()" disabled>Sebelumnya</button>
+      <button class="btn btn-primary" id="btnNext" onclick="nextQuestion()">Selanjutnya</button>
+      <button class="btn btn-success" id="btnSubmit" onclick="submitExam()" style="display: none;">Selesai Ujian</button>
+    </div>
+  </div>
+
+  <!-- Halaman Selesai -->
+  <div id="resultPage" style="display: none; text-align: center;">
+    <h2>Ujian Telah Selesai!</h2>
+    <p>Terima kasih. Jawaban Anda dan catatan pelaksanaan ujian telah berhasil dikirim ke sistem.</p>
+  </div>
+</div>
+
+<script>
+  // MASUKKAN URL GOOGLE APPS SCRIPT ANDA DI SINI
+  const BACKEND_URL = "URL_APPS_SCRIPT_ANDA_DI_SINI";
+
+  let questions = [];
+  let userAnswers = {};
+  let currentQuestionIndex = 0;
+  let timerInterval;
+  let timeLeft = 3600; // 60 menit
+  let studentData = { nama: "", nis: "" };
+
+  let violations = [];
+  let violationCount = 0;
+
+  function setupAntiCheating() {
+    document.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('copy', e => e.preventDefault());
+    document.addEventListener('cut', e => e.preventDefault());
+    document.addEventListener('paste', e => e.preventDefault());
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        logViolation("Membuka Tab Lain / Meminimalkan Browser");
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      logViolation("Meninggalkan Jendela Ujian (Alt+Tab / Buka App Lain)");
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (
+        e.key === "F12" ||
+        (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "i" || e.key === "J" || e.key === "j")) ||
+        (e.ctrlKey && (e.key === "U" || e.key === "u"))
+      ) {
+        e.preventDefault();
+        logViolation("Mencoba Membuka Developer Tools / Source Code");
+      }
+    });
+  }
+
+  function logViolation(reason) {
+    const timeString = new Date().toLocaleTimeString();
+    const logMessage = `[${timeString}] ${reason}`;
+    
+    if (violations.length > 0 && violations[violations.length - 1].includes(reason)) {
+      return;
+    }
+
+    violations.push(logMessage);
+    violationCount++;
+    document.getElementById("violationCount").innerText = violationCount;
+
+    document.getElementById("warningText").innerText = `TERDETEKSI KECURANGAN:\n"${reason}"`;
+    document.getElementById("warningOverlay").style.display = "flex";
+  }
+
+  function closeWarning() {
+    document.getElementById("warningOverlay").style.display = "none";
+  }
+
+  async function startExam() {
+    const nama = document.getElementById("inputNama").value.trim();
+    const nis = document.getElementById("inputNis").value.trim();
+
+    if (!nama || !nis) {
+      alert("Mohon isi Nama dan NIS terlebih dahulu!");
+      return;
+    }
+
+    studentData.nama = nama;
+    studentData.nis = nis;
+
+    document.getElementById("loginPage").style.display = "none";
+    document.getElementById("examPage").style.display = "block";
+    document.getElementById("displayNama").innerText = nama;
+
+    setupAntiCheating();
+
+    try {
+      const res = await fetch(`${BACKEND_URL}?action=getSoal`);
+      questions = await res.json();
+      renderQuestion();
+      startTimer();
+    } catch (err) {
+      alert("Gagal mengambil soal! Periksa koneksi internet atau URL Script Anda.");
+    }
+  }
+
+  function renderQuestion() {
+    const q = questions[currentQuestionIndex];
+    document.getElementById("questionText").innerText = `${currentQuestionIndex + 1}. ${q.soal}`;
+    
+    const container = document.getElementById("optionsContainer");
+    container.innerHTML = "";
+
+    const options = ['a', 'b', 'c', 'd'];
+    options.forEach(opt => {
+      const label = document.createElement("label");
+      const isChecked = userAnswers[q.id] === opt ? "checked" : "";
+      label.innerHTML = `
+        <input type="radio" name="option" value="${opt}" ${isChecked} onchange="selectAnswer('${q.id}', '${opt}')">
+        <strong>${opt.toUpperCase()}.</strong> ${q[opt]}
+      `;
+      container.appendChild(label);
+    });
+
+    document.getElementById("btnPrev").disabled = currentQuestionIndex === 0;
+    if (currentQuestionIndex === questions.length - 1) {
+      document.getElementById("btnNext").style.display = "none";
+      document.getElementById("btnSubmit").style.display = "inline-block";
+    } else {
+      document.getElementById("btnNext").style.display = "inline-block";
+      document.getElementById("btnSubmit").style.display = "none";
+    }
+  }
+
+  function selectAnswer(questionId, selectedOption) {
+    userAnswers[questionId] = selectedOption;
+  }
+
+  function nextQuestion() {
+    if (currentQuestionIndex < questions.length - 1) {
+      currentQuestionIndex++;
+      renderQuestion();
+    }
+  }
+
+  function prevQuestion() {
+    if (currentQuestionIndex > 0) {
+      currentQuestionIndex--;
+      renderQuestion();
+    }
+  }
+
+  function startTimer() {
+    timerInterval = setInterval(() => {
+      timeLeft--;
+      let minutes = Math.floor(timeLeft / 60);
+      let seconds = timeLeft % 60;
+      document.getElementById("timerDisplay").innerText = 
+        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+      if (timeLeft <= 0) {
+        clearInterval(timerInterval);
+        alert("Waktu ujian telah habis!");
+        submitExam();
+      }
+    }, 1000);
+  }
+
+  async function submitExam() {
+    if (timeLeft > 0 && !confirm("Apakah Anda yakin ingin menyelesaikan ujian ini?")) {
+      return;
+    }
+
+    clearInterval(timerInterval);
+
+    let correctCount = 0;
+    questions.forEach(q => {
+      if (userAnswers[q.id] && userAnswers[q.id].toLowerCase() === q.kunci.toLowerCase()) {
+        correctCount++;
+      }
+    });
+
+    let score = (correctCount / questions.length) * 100;
+
+    const payload = {
+      nama: studentData.nama,
+      nis: studentData.nis,
+      nilai: score.toFixed(2),
+      pelanggaranCount: violationCount,
+      pelanggaranLog: violations.join(" | ")
+    };
+
+    document.getElementById("examPage").innerHTML = "<h3>Sedang mengirim hasil ujian...</h3>";
+
+    try {
+      await fetch(BACKEND_URL, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      document.getElementById("examPage").style.display = "none";
+      document.getElementById("resultPage").style.display = "block";
+    } catch (err) {
+      alert("Gagal mengirim hasil ke server! Namun jawaban Anda tetap tersimpan.");
+    }
+  }
+</script>
+</body>
+</html>
